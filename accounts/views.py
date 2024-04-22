@@ -6,13 +6,20 @@ from django.contrib.auth import authenticate
 from accounts.renderers import UserRenderer
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAuthenticated
-# Assuming this is views.py in your app directory
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
 from rest_framework import generics, permissions
 from django.shortcuts import get_object_or_404
-
+import pandas as pd
+import Levenshtein
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.models import load_model
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+import numpy as np
+import jellyfish
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.http import HttpResponse
 from .models import User, UserProfile  # Import your User model
 from django.contrib.auth import get_user_model
 from rest_framework.authtoken.models import Token
@@ -140,3 +147,85 @@ class LoginView(generics.CreateAPIView):
         else:
             return Response({'detail': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
 
+
+df = pd.read_csv('Words_For_Kids.csv')
+df = df.dropna(subset=['Pronunciation'])
+
+max_sequence_length = 15
+urdu_char = {
+    'ا': 1, 'ی': 2, 'ر': 3, 'ن': 4, 'و': 5, 'ت': 6, 'ل': 7, 'م': 8, 'ک': 9, 'س': 10,
+    'ب': 11, 'ں': 12, 'ھ': 13, 'د': 14, 'ہ': 15, 'پ': 16, 'ٹ': 17, 'ج': 18, 'گ': 19,
+    'چ': 20, 'ے': 21, 'ف': 22, 'ش': 23, 'ئ': 24, 'ق': 25, 'ع': 26, 'ز': 27, 'ڑ': 28,
+    'ح': 29, 'خ': 30, 'ڈ': 31, 'ط': 32, 'ص': 33, 'غ': 34, 'ؤ': 35, 'ض': 36, 'آ': 37,
+    'ذ': 38, 'ث': 39, 'ظ': 40, 'ء': 41, 'ژ': 42, 'ۃ': 43
+}
+
+pronounce_char = {
+      1: ' ', 2: '_', 3: 'a', 4: 'i', 5: 'd', 6: 'n', 7: 't', 8: 'r', 9: 's',
+      10: 'h', 11: 'u', 12: 'o', 13: 'm', 14: 'l', 15: 'z', 16: 'k', 17: 'y',
+      18: 'b', 19: 'g', 20: 'j', 21: 'p', 22: 'v', 23: 'f', 24: 'q', 25: 'e',
+      26: 'x'
+}
+
+train_df, _ = train_test_split(df, test_size=0.2, random_state=42)
+
+pronunciation_encoder = LabelEncoder()
+train_df['Encoded_Pronunciation'] = pronunciation_encoder.fit_transform(train_df['Pronunciation'])
+
+model = load_model('Pronunounce_model(2).h5')
+
+def find_closest_word(input_pronunciation, train_df, pronunciation_encoder):
+    try:
+        input_encoded = pronunciation_encoder.transform([input_pronunciation])[0]
+    except ValueError:
+        df['Levenshtein_Distance'] = df['Pronunciation'].apply(lambda x: Levenshtein.distance(input_pronunciation, x))
+        closest_word_index = df['Levenshtein_Distance'].idxmin()
+        closest_word = df.loc[closest_word_index, 'Words']
+        return closest_word
+    train_df['Levenshtein_Distance'] = train_df['Encoded_Pronunciation'].apply(lambda x: Levenshtein.distance(str(input_encoded), str(x)))
+    closest_word_index = train_df['Levenshtein_Distance'].idxmin()
+    closest_word = train_df.loc[closest_word_index, 'Words']
+    return closest_word
+
+def urdu_tokenizer(text, char_to_index):
+    tokens = []
+    for char in text:
+        if char in char_to_index:
+            tokens.append(char_to_index[char])
+        else:
+            pass
+    return [tokens]
+
+def pro_tokenizer(indices, index_to_char):
+    return ''.join(index_to_char[index] for index in indices if index in index_to_char)
+
+def predict_pronunciation(new_urdu_word):
+    tokenized_word = urdu_tokenizer(new_urdu_word, urdu_char)
+    padded_word = pad_sequences(tokenized_word, maxlen=max_sequence_length, padding='post')
+    predictions = model.predict(padded_word)
+    predicted_pronunciation_indices = [np.argmax(pred) for pred in predictions[0]]
+    predict_pronunciation = pro_tokenizer(predicted_pronunciation_indices, pronounce_char)
+    return predict_pronunciation.upper()
+
+@csrf_exempt
+def process_text(request):
+    if request.method == 'POST':
+        data = request.POST.get('data')
+        if not data:
+            return JsonResponse({'error': 'No data provided'}, status=400)
+
+        input_words = data.split()
+        predicted_pronunciations = []
+        for word in input_words:
+            predicted_pronunciation = predict_pronunciation(word)
+            predicted_pronunciations.append(predicted_pronunciation)
+
+        combined_pronunciation = ' '.join(predicted_pronunciations)
+        closest_word = find_closest_word(combined_pronunciation, train_df, pronunciation_encoder)
+
+        if closest_word:
+            return JsonResponse({'closest_word': closest_word}, status=200)
+        else:
+            return JsonResponse({'error': 'No closest word found'}, status=404)
+    else:
+        return HttpResponse("Method not allowed", status=405)
