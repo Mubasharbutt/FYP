@@ -10,13 +10,10 @@ from rest_framework import generics, permissions
 from django.shortcuts import get_object_or_404
 import pandas as pd
 import Levenshtein
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
-from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 import numpy as np
-import jellyfish
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.http import HttpResponse
@@ -219,7 +216,7 @@ def find_closest_word(input_pronunciation, train_df, pronunciation_encoder):
         input_encoded = pronunciation_encoder.transform([input_pronunciation])[0]
     except ValueError:
         df['Levenshtein_Distance'] = df['Pronunciation'].apply(lambda x: Levenshtein.distance(input_pronunciation, x))
-
+    
         # Find the word with the closest pronunciation in the entire dataset
         closest_word_index = df['Levenshtein_Distance'].idxmin()
         closest_word = df.loc[closest_word_index, 'Words']
@@ -228,6 +225,35 @@ def find_closest_word(input_pronunciation, train_df, pronunciation_encoder):
     closest_word_index = train_df['Levenshtein_Distance'].idxmin()
     closest_word = train_df.loc[closest_word_index, 'Words']
     return closest_word
+
+
+# from metaphone import doublemetaphone
+
+# def encode_pronunciation(pronunciation):
+#     primary, secondary = doublemetaphone(pronunciation)
+#     return primary or secondary
+
+# def find_closest_word(input_pronunciation, train_df, pronunciation_encoder):
+#     try:
+#         input_encoded = pronunciation_encoder.transform([input_pronunciation])[0]
+#     except ValueError:
+#         # Encode input pronunciation using Double Metaphone if encoder fails
+#         input_encoded = encode_pronunciation(input_pronunciation)
+        
+#         # Compute Levenshtein distance for the entire dataset
+#         train_df['Levenshtein_Distance'] = train_df['Pronunciation'].apply(
+#             lambda x: levenshtein_distance(input_pronunciation, x)
+#         )
+#     else:
+#         # Compute Levenshtein distance for the encoded dataset
+#         train_df['Levenshtein_Distance'] = train_df['Encoded_Pronunciation'].apply(
+#             lambda x: levenshtein_distance(str(input_encoded), str(x))
+#         )
+        
+#     # Find the word with the closest pronunciation
+#     closest_word_index = train_df['Levenshtein_Distance'].idxmin()
+#     closest_word = train_df.loc[closest_word_index, 'Words']
+#     return closest_word
 
 def urdu_tokenizer(text, char_to_index):
     tokens = []
